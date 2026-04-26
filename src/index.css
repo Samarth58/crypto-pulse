@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* ── Tailwind v4: class-based dark mode ─────────────────────────────────────
+   tailwind.config.js is ignored in v4. Dark mode must be declared here.
+   This activates all `dark:` utilities when .dark is on any ancestor
+   (useTheme.js adds/removes it on <html>).
+────────────────────────────────────────────────────────────────────────────── */
+@variant dark (&:where(.dark, .dark *));
+
+/* Design tokens as standard CSS custom properties */
+:root {
+  --color-bg-light: #f8fafc;
+  --color-bg-dark: #0f172a;
+}
+
+/* Text gradient */
+.text-gradient {
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+.dark ::-webkit-scrollbar-thumb { background: #475569; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Body */
+body {
+  font-family: "Inter", "Outfit", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
