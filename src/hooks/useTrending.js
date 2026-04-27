@@ -8,8 +8,8 @@ export const useTrending = (pollIntervalMs = 60000) => {
   const [error, setError] = useState(null);
   const [isStale, setIsStale] = useState(false);
 
-  const lastVersionRef = useRef(0);
   const isMountedRef = useRef(true);
+  const currentRequestIdRef = useRef(0);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -17,37 +17,39 @@ export const useTrending = (pollIntervalMs = 60000) => {
   }, []);
 
   const loadTrending = useCallback(async (isPoll = false) => {
-    const isManual = !isPoll;
-    if ((trending.length === 0 && !isPoll) || isManual) {
+    const isInitial = trending.length === 0 && !isPoll;
+    
+    if (isInitial || !isPoll) {
       setLoading(true);
       setError(null);
     }
     setIsFetching(true);
     
+    const requestId = ++currentRequestIdRef.current;
+    
     try {
-      const response = await cryptoService.getTrendingCoins({ forceRefresh: isManual });
+      const response = await cryptoService.getTrendingCoins();
       
-      if (!isMountedRef.current || response.isOutdated) return;
-
-      // Versioning Check
-      if (response.version < lastVersionRef.current) return;
-      lastVersionRef.current = response.version;
+      if (!isMountedRef.current || requestId !== currentRequestIdRef.current) return;
 
       if (response.data && response.data.length > 0) {
         setTrending(response.data);
-        setIsStale(response.isStale);
-        if (!response.error) {
+        setIsStale(response.isCached);
+        if (response.error) {
+          if (import.meta.env.DEV) console.warn("[useTrending] Fetch error, using cache:", response.error);
+          setError(response.error);
+        } else {
           setError(null);
         }
       } else if (response.error && trending.length === 0) {
         setError(response.error);
       }
     } catch (err) {
-      if (isMountedRef.current && trending.length === 0) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current && trending.length === 0) {
         setError(err.message);
       }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current) {
         setLoading(false);
         setIsFetching(false);
       }
@@ -56,6 +58,7 @@ export const useTrending = (pollIntervalMs = 60000) => {
 
   useEffect(() => {
     loadTrending();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

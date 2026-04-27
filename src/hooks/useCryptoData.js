@@ -11,8 +11,8 @@ export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
   const [page, setPage] = useState(1);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
-  const lastVersionRef = useRef(0);
   const isMountedRef = useRef(true);
+  const currentRequestIdRef = useRef(0);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -21,9 +21,8 @@ export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
 
   const loadData = useCallback(async (targetPage = 1, isPoll = false) => {
     const isInitial = targetPage === 1 && data.length === 0 && !isPoll;
-    const isManual = !isPoll;
     
-    if (isInitial || isManual) {
+    if (isInitial || (!isPoll && targetPage === 1)) {
       setLoading(true);
       setError(null);
     }
@@ -31,36 +30,33 @@ export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
     if (targetPage > 1) setIsFetchingMore(true);
     else setIsFetching(true);
 
+    const requestId = ++currentRequestIdRef.current;
+
     try {
-      const response = await cryptoService.getTopCryptos(20 * targetPage, currency, {
-        forceRefresh: isManual
-      });
+      const response = await cryptoService.getTopCryptos(20 * targetPage, currency);
 
-      if (!isMountedRef.current || response.isOutdated) return;
-
-      // Versioning Check
-      if (response.version < lastVersionRef.current) return;
-      lastVersionRef.current = response.version;
+      if (!isMountedRef.current || requestId !== currentRequestIdRef.current) return;
 
       if (response.data && response.data.length > 0) {
         setData(response.data);
         setLastUpdated(response.timestamp);
-        setIsStale(response.isStale);
+        setIsStale(response.isCached);
         
-        if (!response.error) {
+        if (response.error) {
+          if (import.meta.env.DEV) console.warn("[useCryptoData] Fetch error, using cache:", response.error);
+          setError(response.error);
+        } else {
           setError(null);
-        } else if (import.meta.env.DEV) {
-          console.warn("[useCryptoData] Fetch had error but used cache:", response.error);
         }
       } else if (response.error) {
         setError(response.error);
       }
     } catch (err) {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current) {
         setError(err.message);
       }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current) {
         setLoading(false);
         setIsFetching(false);
         setIsFetchingMore(false);
@@ -72,6 +68,7 @@ export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
   useEffect(() => {
     setPage(1);
     loadData(1, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currency]);
 
   // Polling

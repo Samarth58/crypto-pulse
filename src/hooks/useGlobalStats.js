@@ -8,8 +8,8 @@ export const useGlobalStats = (pollIntervalMs = 60000) => {
   const [error, setError] = useState(null);
   const [isStale, setIsStale] = useState(false);
   
-  const lastVersionRef = useRef(0);
   const isMountedRef = useRef(true);
+  const currentRequestIdRef = useRef(0);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -17,38 +17,40 @@ export const useGlobalStats = (pollIntervalMs = 60000) => {
   }, []);
 
   const loadStats = useCallback(async (isPoll = false) => {
-    const isManual = !isPoll;
-    if ((!stats && !isPoll) || isManual) {
+    const isInitial = !stats && !isPoll;
+    
+    if (isInitial || !isPoll) {
       setLoading(true);
       setError(null);
     }
     setIsFetching(true);
     
+    const requestId = ++currentRequestIdRef.current;
+    
     try {
-      const response = await cryptoService.getGlobalStats({ forceRefresh: isManual });
+      const response = await cryptoService.getGlobalStats();
 
-      if (!isMountedRef.current || response.isOutdated) return;
-
-      // Versioning check
-      if (response.version < lastVersionRef.current) return;
-      lastVersionRef.current = response.version;
+      if (!isMountedRef.current || requestId !== currentRequestIdRef.current) return;
 
       if (response.data) {
         setStats(response.data);
-        setIsStale(response.isStale);
+        setIsStale(response.isCached);
         
-        if (!response.error) {
+        if (response.error) {
+          if (import.meta.env.DEV) console.warn("[useGlobalStats] Fetch error, using cache:", response.error);
+          setError(response.error);
+        } else {
           setError(null);
         }
       } else if (response.error && !stats) {
         setError(response.error);
       }
     } catch (err) {
-      if (isMountedRef.current && !stats) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current && !stats) {
         setError(err.message);
       }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && requestId === currentRequestIdRef.current) {
         setLoading(false);
         setIsFetching(false);
       }
@@ -57,6 +59,7 @@ export const useGlobalStats = (pollIntervalMs = 60000) => {
 
   useEffect(() => {
     loadStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

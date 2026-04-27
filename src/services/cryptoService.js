@@ -1,51 +1,15 @@
 const COINGECKO_BASE_URL = '/api';
 const API_KEY = import.meta.env.VITE_COINGECKO_API_KEY || '';
 
-// Per-URL versioning to allow concurrent requests to different endpoints
-const urlVersions = new Map();
-
 // Cache: { url: { data, timestamp } }
 const cache = {};
 
-// Cache duration (60 seconds)
-const CACHE_DURATION = 60000;
-
 /**
- * Standardized response formatter
+ * Core API call wrapper with retry logic, fallback caching.
  */
-const formatResponse = (data, error = null, url = null, version = 0) => {
-  const cached = url ? cache[url] : null;
-  return {
-    data: data || (cached ? cached.data : null),
-    error,
-    isStale: !!(!data && cached),
-    timestamp: cached ? cached.timestamp : Date.now(),
-    version: version || (url ? (urlVersions.get(url) || 0) : 0),
-    isOutdated: false
-  };
-};
-
-/**
- * Core API call wrapper with retry logic, caching, and versioning.
- */
-const apiCall = async (endpoint, options = {}, retries = 3, backoff = 1000) => {
+const apiCall = async (endpoint, options = {}, retries = 2, backoff = 1000) => {
   const url = endpoint.startsWith('http') ? endpoint : `${COINGECKO_BASE_URL}${endpoint}`;
   
-  // Increment version for THIS specific URL
-  const currentVersion = (urlVersions.get(url) || 0) + 1;
-  urlVersions.set(url, currentVersion);
-  
-  // 1. Check Cache for freshness (Bypass if forceRefresh is true)
-  if (options.forceRefresh) {
-    delete cache[url];
-  } else {
-    const cached = cache[url];
-    const now = Date.now();
-    if (cached && (now - cached.timestamp < CACHE_DURATION)) {
-      return formatResponse(cached.data, null, url, currentVersion);
-    }
-  }
-
   const headers = { ...options?.headers };
   if (API_KEY) {
     headers['x-cg-demo-api-key'] = API_KEY;
@@ -57,18 +21,19 @@ const apiCall = async (endpoint, options = {}, retries = 3, backoff = 1000) => {
       headers,
     });
 
-    // Check if this request is still the latest for THIS URL
-    if (currentVersion < (urlVersions.get(url) || 0)) {
-      return { isOutdated: true };
-    }
-
     if (response.ok) {
       const result = await response.json();
       if (!result) throw new Error('Empty API response');
       
       // Update cache
       cache[url] = { data: result, timestamp: Date.now() };
-      return formatResponse(result, null, url, currentVersion);
+      
+      return {
+        data: result,
+        error: null,
+        isCached: false,
+        timestamp: Date.now()
+      };
     }
 
     // Handle Rate Limiting (429)
@@ -79,7 +44,7 @@ const apiCall = async (endpoint, options = {}, retries = 3, backoff = 1000) => {
         await new Promise(r => setTimeout(r, delay));
         return apiCall(endpoint, options, retries - 1, delay);
       }
-      throw new Error('API Rate limit reached. Using cached data.');
+      throw new Error('API Rate limit reached.');
     }
 
     let errorMessage = `API ${response.status}`;
@@ -91,7 +56,25 @@ const apiCall = async (endpoint, options = {}, retries = 3, backoff = 1000) => {
 
   } catch (error) {
     if (import.meta.env.DEV) console.error(`[cryptoService] Error:`, error.message);
-    return formatResponse(null, error.message || 'Network error', url, currentVersion);
+    
+    // Fallback to cache if available
+    const cached = cache[url];
+    if (cached) {
+      if (import.meta.env.DEV) console.warn(`[cryptoService] Falling back to cache for ${url}`);
+      return {
+        data: cached.data,
+        error: error.message, // Include error so UI can know we fell back due to error
+        isCached: true,
+        timestamp: cached.timestamp
+      };
+    }
+    
+    return {
+      data: null,
+      error: error.message || 'Network error',
+      isCached: false,
+      timestamp: Date.now()
+    };
   }
 };
 
