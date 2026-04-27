@@ -13,7 +13,7 @@ const TopLosers = ({ coins, loading, currency = 'usd' }) => {
   if (loading || !coins || coins.length === 0) {
     return (
       <SectionCard title="Top Losers" icon={TrendingDown} className="h-full">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
           {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
         </div>
       </SectionCard>
@@ -26,7 +26,7 @@ const TopLosers = ({ coins, loading, currency = 'usd' }) => {
 
   return (
     <SectionCard title="Top Losers" icon={TrendingDown} className="h-full">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
         {losers.map((coin) => (
           <div
             key={coin.id}

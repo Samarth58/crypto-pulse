@@ -1,5 +1,5 @@
 import React, { memo, useMemo } from 'react';
-import { ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronUp, ChevronDown, LayoutList } from 'lucide-react';
 import CryptoRow, { CryptoCard } from './CryptoRow';
 import { useWatchlist } from '../contexts/WatchlistContext';
 

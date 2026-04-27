@@ -6,13 +6,13 @@ import { ErrorState } from './ui/ErrorState';
 import SectionCard from './layout/SectionCard';
 import SafeImage from './ui/SafeImage';
 
-const Trending = ({ trending, loading, error, onRetry }) => {
+const Trending = ({ trending, loading, error, isStale, onRetry }) => {
   const { openModal } = useCoinContext();
 
-  if (loading) {
+  if (loading && (!trending || trending.length === 0)) {
     return (
       <SectionCard title="Trending" icon={Flame} className="h-full">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
           {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
         </div>
       </SectionCard>
@@ -28,8 +28,13 @@ const Trending = ({ trending, loading, error, onRetry }) => {
   }
 
   return (
-    <SectionCard title="Trending" icon={Flame} className="h-full">
-      <div className="grid grid-cols-2 gap-4">
+    <SectionCard 
+      title="Trending" 
+      icon={Flame} 
+      className="h-full"
+      badge={isStale ? "Cached" : null}
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4">
         {trending.slice(0, 4).map((item) => {
           const coin = item.item;
           return (

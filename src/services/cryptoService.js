@@ -1,171 +1,134 @@
 const COINGECKO_BASE_URL = '/api';
 const API_KEY = import.meta.env.VITE_COINGECKO_API_KEY || '';
 
-// Basic in-memory cache: { url: { data, timestamp } }
+// Per-URL versioning to allow concurrent requests to different endpoints
+const urlVersions = new Map();
+
+// Cache: { url: { data, timestamp } }
 const cache = {};
 
+// Cache duration (60 seconds)
+const CACHE_DURATION = 60000;
+
 /**
- * Core API call wrapper with retry logic, caching, and error handling.
+ * Standardized response formatter
  */
-const apiCall = async (endpoint, options = {}, retries = 2, backoff = 500) => {
+const formatResponse = (data, error = null, url = null, version = 0) => {
+  const cached = url ? cache[url] : null;
+  return {
+    data: data || (cached ? cached.data : null),
+    error,
+    isStale: !!(!data && cached),
+    timestamp: cached ? cached.timestamp : Date.now(),
+    version: version || (url ? (urlVersions.get(url) || 0) : 0),
+    isOutdated: false
+  };
+};
+
+/**
+ * Core API call wrapper with retry logic, caching, and versioning.
+ */
+const apiCall = async (endpoint, options = {}, retries = 3, backoff = 1000) => {
   const url = endpoint.startsWith('http') ? endpoint : `${COINGECKO_BASE_URL}${endpoint}`;
   
+  // Increment version for THIS specific URL
+  const currentVersion = (urlVersions.get(url) || 0) + 1;
+  urlVersions.set(url, currentVersion);
+  
+  // 1. Check Cache for freshness (Bypass if forceRefresh is true)
+  if (options.forceRefresh) {
+    delete cache[url];
+  } else {
+    const cached = cache[url];
+    const now = Date.now();
+    if (cached && (now - cached.timestamp < CACHE_DURATION)) {
+      return formatResponse(cached.data, null, url, currentVersion);
+    }
+  }
+
   const headers = { ...options?.headers };
   if (API_KEY) {
-    // Note: Use 'x-cg-pro-api-key' and 'pro-api.coingecko.com' for Pro keys
     headers['x-cg-demo-api-key'] = API_KEY;
   }
 
-  const fetchOptions = {
-    ...options,
-    headers,
-  };
-
   try {
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(url, {
+      ...options,
+      headers,
+    });
+
+    // Check if this request is still the latest for THIS URL
+    if (currentVersion < (urlVersions.get(url) || 0)) {
+      return { isOutdated: true };
+    }
 
     if (response.ok) {
       const result = await response.json();
-      if (!result) {
-        throw new Error('Received empty data from API');
-      }
+      if (!result) throw new Error('Empty API response');
+      
+      // Update cache
       cache[url] = { data: result, timestamp: Date.now() };
-      return { data: result, error: null };
+      return formatResponse(result, null, url, currentVersion);
     }
 
-    // Handle non-OK responses
-    let errorMessage = `API call failed with status ${response.status}`;
-    try {
-      const errorData = await response.json();
-      if (errorData?.status?.error_message) {
-        errorMessage = errorData.status.error_message;
-      } else if (errorData?.error) {
-        errorMessage = errorData.error;
-      }
-    } catch (_) {
-      // Body is not JSON or couldn't be parsed
-      errorMessage = `${errorMessage}: ${response.statusText}`;
-    }
-
+    // Handle Rate Limiting (429)
     if (response.status === 429) {
       if (retries > 0) {
-        const delay = Math.max(backoff * 2, 5000);
-        if (import.meta.env.DEV) {
-          console.warn(`Rate limited on ${url}. Retrying in ${delay}ms...`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        const delay = Math.min(backoff * 2, 8000); // Max 8s backoff
+        if (import.meta.env.DEV) console.warn(`[cryptoService] 429 Rate Limit. Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
         return apiCall(endpoint, options, retries - 1, delay);
       }
-      throw new Error('Rate limit exceeded. Please wait a moment.');
+      throw new Error('API Rate limit reached. Using cached data.');
     }
 
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(`Authentication Error: ${errorMessage}. Please check your API key status.`);
-    }
-
+    let errorMessage = `API ${response.status}`;
+    try {
+      const err = await response.json();
+      errorMessage = err.status?.error_message || err.error || errorMessage;
+    } catch (_) {}
     throw new Error(errorMessage);
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      return { data: null, error: 'Request was cancelled' };
-    }
-    
-    // "Failed to fetch" often masks a 429 (Rate Limit) error from CoinGecko 
-    // because their 429 responses sometimes lack CORS headers.
-    if (error.message === 'Failed to fetch') {
-      return { data: null, error: 'CoinGecko API rate limit reached. Please wait 1-2 minutes or add an API key.' };
-    }
 
-    if (import.meta.env.DEV) {
-      console.error(`Error fetching data from ${url}:`, error);
-    }
-    return { data: null, error: error?.message || 'An unknown network error occurred' };
+  } catch (error) {
+    if (import.meta.env.DEV) console.error(`[cryptoService] Error:`, error.message);
+    return formatResponse(null, error.message || 'Network error', url, currentVersion);
   }
 };
 
 export const cryptoService = {
-  getTopCryptos: async (limit = 20, currency = 'usd', signal) => {
+  getTopCryptos: async (limit = 20, currency = 'usd', options = {}) => {
     const endpoint = `/coins/markets?vs_currency=${currency.toLowerCase()}&order=market_cap_desc&per_page=${limit}&page=1&sparkline=false&price_change_percentage=24h`;
-    const response = await apiCall(endpoint, { signal });
-    
-    if (response.data && !Array.isArray(response.data)) {
-        return { data: [], error: 'Invalid response format: Expected array of coins.' };
-    }
-    
-    if (!response.data) {
-        response.data = [];
-    }
-    
-    return response;
+    const res = await apiCall(endpoint, options);
+    return { ...res, data: Array.isArray(res.data) ? res.data : [] };
   },
 
-  getCoinHistory: async (coinId, currency = 'usd', days = 7, signal) => {
+  getCoinHistory: async (coinId, currency = 'usd', days = 7, options = {}) => {
     const endpoint = `/coins/${encodeURIComponent(coinId)}/market_chart?vs_currency=${currency.toLowerCase()}&days=${days}`;
-    const response = await apiCall(endpoint, { signal });
-    
-    if (response.data) {
-      if (!response.data.prices || !Array.isArray(response.data.prices)) {
-         return { data: [], error: 'Invalid response format: Missing price data.' };
-      }
-      return { data: response.data.prices, error: response.error };
-    }
-    
-    response.data = [];
-    return response;
+    const res = await apiCall(endpoint, options);
+    return { ...res, data: res.data?.prices || [] };
   },
 
-  getCoinDetails: async (coinId, signal) => {
+  getCoinDetails: async (coinId, options = {}) => {
     const endpoint = `/coins/${encodeURIComponent(coinId)}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`;
-    return await apiCall(endpoint, { signal });
+    return await apiCall(endpoint, options);
   },
 
-  getGlobalStats: async (signal) => {
-    const endpoint = `/global`;
-    const response = await apiCall(endpoint, { signal });
-    
-    if (response.data) {
-      if (!response.data.data) {
-         return { data: null, error: 'Invalid response format: Missing global stats.' };
-      }
-      return { data: response.data.data, error: response.error };
-    }
-    
-    return response;
+  getGlobalStats: async (options = {}) => {
+    const res = await apiCall(`/global`, options);
+    return { ...res, data: res.data?.data || null };
   },
 
-  getTrendingCoins: async (signal) => {
-    const endpoint = `/search/trending`;
-    const response = await apiCall(endpoint, { signal });
-    
-    if (response.data) {
-       if (!response.data.coins || !Array.isArray(response.data.coins)) {
-          return { data: [], error: 'Invalid response format: Missing trending coins.' };
-       }
-       return { data: response.data.coins, error: response.error };
-    }
-    
-    response.data = [];
-    return response;
+  getTrendingCoins: async (options = {}) => {
+    const res = await apiCall(`/search/trending`, options);
+    return { ...res, data: res.data?.coins || [] };
   },
 
-  getOHLC: async (coinId, currency = 'usd', days = 7, signal) => {
-    // CoinGecko OHLC supports: 1, 7, 14, 30, 90, 180, 365
-    // If days is not supported, we'll use the nearest supported value
+  getOHLC: async (coinId, currency = 'usd', days = 7, options = {}) => {
     const supportedDays = [1, 7, 14, 30, 90, 180, 365];
     const targetDays = supportedDays.find(d => d >= days) || 365;
-    
     const endpoint = `/coins/${encodeURIComponent(coinId)}/ohlc?vs_currency=${currency.toLowerCase()}&days=${targetDays}`;
-    const response = await apiCall(endpoint, { signal });
-    
-    if (response.data) {
-      if (!Array.isArray(response.data)) {
-        return { data: [], error: 'Invalid response format: Expected array of OHLC data.' };
-      }
-      // Format: [ [time, open, high, low, close], ... ]
-      return { data: response.data, error: response.error };
-    }
-    
-    response.data = [];
-    return response;
+    const res = await apiCall(endpoint, options);
+    return { ...res, data: Array.isArray(res.data) ? res.data : [] };
   }
 };
 

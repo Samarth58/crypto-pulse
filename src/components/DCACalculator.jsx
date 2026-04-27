@@ -120,9 +120,9 @@ const DCACalculator = ({ coinId, coinName, coinSymbol, currency = 'usd', current
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors"
+        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-blue-500/20 active:scale-95"
       >
-        <Calculator size={16} />
+        <Calculator size={18} />
         DCA Calculator
       </button>
     );

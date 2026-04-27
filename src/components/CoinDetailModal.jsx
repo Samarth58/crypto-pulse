@@ -50,47 +50,37 @@ const CoinDetailModal = ({ currency = 'usd' }) => {
 
     let isMounted = true;
     const fetchDetails = async () => {
-      const cacheKey = `${selectedCoinId}`;
-      const cached = detailCache[cacheKey];
-      if (cached && (new Date() - cached.timestamp < DETAIL_CACHE_TTL)) {
-        setCoinDetails(cached.data);
-        setLoading(false);
-        setError(null);
-        return;
-      }
-
       setLoading(true);
       setError(null);
 
-      if (abortControllerRef.current) abortControllerRef.current.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+      try {
+        const response = await cryptoService.getCoinDetails(selectedCoinId);
 
-      const { data, error: fetchError } = await cryptoService.getCoinDetails(selectedCoinId, controller.signal);
+        if (!isMounted) return;
 
-      if (!isMounted) return;
-
-      if (fetchError) {
-         if (fetchError === 'Request was cancelled') return;
-         setError(fetchError);
-         setLoading(false);
-         return;
+        if (response.data) {
+          setCoinDetails(response.data);
+          setLoading(false);
+          
+          if (response.error && import.meta.env.DEV) {
+            console.warn("[CoinDetailModal] Fetch error but used cache:", response.error);
+          }
+        } else if (response.error) {
+          setError(response.error);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(err.message);
+          setLoading(false);
+        }
       }
-
-      detailCache[cacheKey] = {
-        data,
-        timestamp: new Date()
-      };
-
-      setCoinDetails(data);
-      setLoading(false);
     };
 
     fetchDetails();
 
     return () => {
       isMounted = false;
-      if (abortControllerRef.current) abortControllerRef.current.abort();
     };
   }, [selectedCoinId, isModalOpen]);
 

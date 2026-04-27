@@ -4,75 +4,69 @@ import { cryptoService } from '../services/cryptoService';
 export const useTrending = (pollIntervalMs = 60000) => {
   const [trending, setTrending] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isFetching, setIsFetching] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState(null);
+  const [isStale, setIsStale] = useState(false);
 
-  const trendingRef = useRef(trending);
-  const isPollingRef = useRef(false);
+  const lastVersionRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
-    trendingRef.current = trending;
-  }, [trending]);
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
-  const loadTrending = useCallback(async (signal, isPoll = false) => {
-    if (isPoll) {
-      if (isPollingRef.current) return;
-      isPollingRef.current = true;
-    }
-
-    if (trendingRef.current.length === 0) {
+  const loadTrending = useCallback(async (isPoll = false) => {
+    const isManual = !isPoll;
+    if ((trending.length === 0 && !isPoll) || isManual) {
       setLoading(true);
-    }
-    
-    setIsFetching(true);
-    
-    const { data, error: fetchError } = await cryptoService.getTrendingCoins(signal);
-    
-    if (fetchError) {
-      if (fetchError === 'Request was cancelled') {
-        if (isPoll) isPollingRef.current = false;
-        setIsFetching(false);
-        return;
-      }
-      console.error("Trending Stats Error:", fetchError);
-      setError(fetchError);
-      
-      if (data && data.length > 0) {
-         if (trendingRef.current.length === 0 || data[0].item.id !== trendingRef.current[0].item.id) {
-           setTrending(data);
-         }
-      }
-    } else {
-      // Basic check: only update if the top trending coin id changed to avoid re-renders
-      if (trendingRef.current.length === 0 || data[0]?.item?.id !== trendingRef.current[0]?.item?.id) {
-         setTrending(data);
-      }
       setError(null);
     }
+    setIsFetching(true);
     
-    if (!signal || !signal.aborted) {
-      setLoading(false);
-      setIsFetching(false);
-      if (isPoll) isPollingRef.current = false;
+    try {
+      const response = await cryptoService.getTrendingCoins({ forceRefresh: isManual });
+      
+      if (!isMountedRef.current || response.isOutdated) return;
+
+      // Versioning Check
+      if (response.version < lastVersionRef.current) return;
+      lastVersionRef.current = response.version;
+
+      if (response.data && response.data.length > 0) {
+        setTrending(response.data);
+        setIsStale(response.isStale);
+        if (!response.error) {
+          setError(null);
+        }
+      } else if (response.error && trending.length === 0) {
+        setError(response.error);
+      }
+    } catch (err) {
+      if (isMountedRef.current && trending.length === 0) {
+        setError(err.message);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+        setIsFetching(false);
+      }
     }
+  }, [trending.length]);
+
+  useEffect(() => {
+    loadTrending();
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    loadTrending(controller.signal);
-    
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const pollController = new AbortController();
-        loadTrending(pollController.signal, true);
+      if (document.visibilityState === 'visible' && !isFetching && !loading) {
+        loadTrending(true);
       }
     }, pollIntervalMs);
 
-    return () => {
-      controller.abort();
-      clearInterval(interval);
-    };
-  }, [loadTrending, pollIntervalMs]);
+    return () => clearInterval(interval);
+  }, [loadTrending, pollIntervalMs, isFetching, loading]);
 
-  return { trending, loading, isFetching, error, retry: () => loadTrending() };
+  return { trending, loading, isFetching, error, isStale, retry: () => loadTrending() };
 };

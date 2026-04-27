@@ -15,24 +15,39 @@ const PortfolioModal = ({ isOpen, onClose, data, currency = 'usd' }) => {
     let pl = 0;
     const assets = [];
 
-    if (!data) return { totalValue: 0, totalProfitLoss: 0, portfolioAssets: [] };
+    if (!data || !Array.isArray(data)) return { totalValue: 0, totalProfitLoss: 0, portfolioAssets: [] };
 
     // Create a map for quick lookup
     const coinMap = new Map(data.map((c) => [c.id, c]));
 
     portfolio.forEach(({ coinId, quantity }) => {
       const coin = coinMap.get(coinId);
-      if (coin) {
-        const assetValue = coin.current_price * quantity;
-        const assetPl = (assetValue * (coin.price_change_percentage_24h || 0)) / 100;
+      const qty = parseFloat(quantity);
+      
+      if (coin && !isNaN(qty)) {
+        const currentPrice = parseFloat(coin.current_price) || 0;
+        const priceChange = parseFloat(coin.price_change_percentage_24h) || 0;
+        
+        const assetValue = currentPrice * qty;
+        const assetPl = (assetValue * priceChange) / 100;
         
         val += assetValue;
         pl += assetPl;
-        assets.push({ id: coinId, qty: quantity, coin, assetValue, assetPl });
+        assets.push({ 
+          id: coinId, 
+          qty: qty, 
+          coin, 
+          assetValue: isNaN(assetValue) ? 0 : assetValue, 
+          assetPl: isNaN(assetPl) ? 0 : assetPl 
+        });
       }
     });
 
-    return { totalValue: val, totalProfitLoss: pl, portfolioAssets: assets };
+    return { 
+      totalValue: isNaN(val) ? 0 : val, 
+      totalProfitLoss: isNaN(pl) ? 0 : pl, 
+      portfolioAssets: assets 
+    };
   }, [portfolio, data]);
 
   const handleAddAsset = () => {

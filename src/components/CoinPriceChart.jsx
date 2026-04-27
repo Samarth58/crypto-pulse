@@ -63,82 +63,56 @@ const CoinPriceChart = ({ coinId, currency = 'usd' }) => {
     let isMounted = true;
 
     const fetchChartData = async () => {
-      const cacheKey = `${coinId}-${currency}-${activeTimeframe.days}`;
-
-      // Check Cache
-      const cached = chartCache[cacheKey];
-      if (cached && (new Date() - cached.timestamp < CACHE_TTL)) {
-        setChartData(cached.data);
-        setLoading(false);
-        setError(null);
-        return;
-      }
-
       setLoading(true);
       setError(null);
 
-      // Abort previous request if switching rapidly
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+      try {
+        const response = await cryptoService.getCoinHistory(coinId, currency, activeTimeframe.days);
 
-      const { data, error: fetchError } = await cryptoService.getCoinHistory(
-        coinId,
-        currency,
-        activeTimeframe.days,
-        controller.signal
-      );
+        if (!isMounted) return;
 
-      if (!isMounted) return;
+        if (response.data && response.data.length > 0) {
+          // Format Data based on timeframe
+          const formattedData = response.data.map(([ts, price]) => {
+            const date = new Date(ts);
+            let dateStr = '';
+            
+            if (activeTimeframe.days === 1) {
+              dateStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            } else if (activeTimeframe.days <= 30) {
+              dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            } else {
+              dateStr = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            }
 
-      if (fetchError) {
-        if (fetchError === 'Request was cancelled') return;
-        setError('Chart data unavailable');
-        setLoading(false);
-        return;
-      }
+            return { date: dateStr, price };
+          });
 
-      if (!data || data.length === 0) {
-        setError('No historical data available');
-        setLoading(false);
-        return;
-      }
-
-      // Format Data based on timeframe
-      const formattedData = data.map(([ts, price]) => {
-        const date = new Date(ts);
-        let dateStr = '';
-        
-        if (activeTimeframe.days === 1) {
-          // 24H view: show time HH:MM
-          dateStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-        } else if (activeTimeframe.days <= 30) {
-          dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          setChartData(formattedData);
+          setLoading(false);
+          
+          if (response.error && import.meta.env.DEV) {
+            console.warn("[CoinPriceChart] Fetch error but used cache:", response.error);
+          }
+        } else if (response.error) {
+          setError(response.error);
+          setLoading(false);
         } else {
-          dateStr = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+          setError('No historical data available');
+          setLoading(false);
         }
-
-        return { date: dateStr, price };
-      });
-
-      chartCache[cacheKey] = {
-        data: formattedData,
-        timestamp: new Date()
-      };
-
-      setChartData(formattedData);
-      setLoading(false);
+      } catch (err) {
+        if (isMounted) {
+          setError(err.message);
+          setLoading(false);
+        }
+      }
     };
 
     fetchChartData();
 
     return () => {
       isMounted = false;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
     };
   }, [coinId, currency, activeTimeframe.days, chartType]);
 

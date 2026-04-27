@@ -1,141 +1,92 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { cryptoService } from '../services/cryptoService';
 
-const CACHE_TTL = 120000;
-
 export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isFetching, setIsFetching] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [isRateLimited, setIsRateLimited] = useState(false);
+  const [isStale, setIsStale] = useState(false);
   const [page, setPage] = useState(1);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
-  const dataRef = useRef(data);
-  const multiCurrencyCacheRef = useRef({});
-  const abortControllerRef = useRef(null);
-  const pageRef = useRef(1);
-  const isPollingRef = useRef(false);
+  const lastVersionRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
-  useEffect(() => {
-    pageRef.current = page;
-  }, [page]);
-
-  const hasDataChanged = (newData, oldData) => {
-    if (!oldData || newData.length !== oldData.length) return true;
-    // O(n) shallow comparison of key financial fields
-    for (let i = 0; i < newData.length; i++) {
-      if (
-        newData[i].id !== oldData[i].id ||
-        newData[i].current_price !== oldData[i].current_price ||
-        newData[i].price_change_percentage_24h !== oldData[i].price_change_percentage_24h
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const loadData = useCallback(async (targetPage = 1, isPoll = false, signal) => {
-    if (isPoll) {
-      if (isPollingRef.current) return;
-      isPollingRef.current = true;
-    } else {
-      if (targetPage === 1 && dataRef.current.length === 0) setLoading(true);
-      else if (targetPage > 1) setIsFetchingMore(true);
+  const loadData = useCallback(async (targetPage = 1, isPoll = false) => {
+    const isInitial = targetPage === 1 && data.length === 0 && !isPoll;
+    const isManual = !isPoll;
+    
+    if (isInitial || isManual) {
+      setLoading(true);
+      setError(null);
     }
     
-    setIsFetching(true);
+    if (targetPage > 1) setIsFetchingMore(true);
+    else setIsFetching(true);
 
-    if (targetPage === 1 && !isPoll) {
-      const cached = multiCurrencyCacheRef.current[currency];
-      const isFresh = cached && (new Date() - cached.timestamp < CACHE_TTL);
-      if (isFresh) {
-        setData(cached.data);
-        setLastUpdated(cached.timestamp);
+    try {
+      const response = await cryptoService.getTopCryptos(20 * targetPage, currency, {
+        forceRefresh: isManual
+      });
+
+      if (!isMountedRef.current || response.isOutdated) return;
+
+      // Versioning Check
+      if (response.version < lastVersionRef.current) return;
+      lastVersionRef.current = response.version;
+
+      if (response.data && response.data.length > 0) {
+        setData(response.data);
+        setLastUpdated(response.timestamp);
+        setIsStale(response.isStale);
+        
+        if (!response.error) {
+          setError(null);
+        } else if (import.meta.env.DEV) {
+          console.warn("[useCryptoData] Fetch had error but used cache:", response.error);
+        }
+      } else if (response.error) {
+        setError(response.error);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(err.message);
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
         setIsFetching(false);
-        setError(null);
-        setIsRateLimited(false);
-        return;
+        setIsFetchingMore(false);
       }
     }
+  }, [currency, data.length]);
 
-    const { data: resultData, error: fetchError } = await cryptoService.getTopCryptos(20 * targetPage, currency, signal);
-
-    if (fetchError) {
-      if (fetchError === 'Request was cancelled') {
-        if (isPoll) isPollingRef.current = false;
-        setIsFetching(false);
-        return;
-      }
-      
-      if (import.meta.env.DEV) {
-        console.error(`Fetch Error [${currency}]:`, fetchError);
-      }
-      if (fetchError.includes('rate limit')) setIsRateLimited(true);
-      
-      if (resultData && resultData.length > 0) {
-         if (hasDataChanged(resultData, dataRef.current)) {
-           setData(resultData);
-         }
-      }
-      setError(fetchError);
-    } else {
-      if (hasDataChanged(resultData, dataRef.current)) {
-        setData(resultData);
-      }
-      
-      multiCurrencyCacheRef.current[currency] = {
-        data: resultData,
-        timestamp: new Date()
-      };
-
-      setLastUpdated(new Date());
-      setError(null);
-      setIsRateLimited(false);
-    }
-
-    if (!signal || !signal.aborted) {
-      setLoading(false);
-      setIsFetching(false);
-      setIsFetchingMore(false);
-      if (isPoll) isPollingRef.current = false;
-    }
+  // Initial & Currency Change
+  useEffect(() => {
+    setPage(1);
+    loadData(1, false);
   }, [currency]);
 
-  useEffect(() => {
-    if (abortControllerRef.current) abortControllerRef.current.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    setPage(1);
-    loadData(1, false, controller.signal);
-
-    return () => {
-      if (abortControllerRef.current) abortControllerRef.current.abort();
-    };
-  }, [currency, loadData]);
-
+  // Polling
   useEffect(() => {
     const intervalId = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const pollController = new AbortController();
-        loadData(pageRef.current, true, pollController.signal);
+      if (document.visibilityState === 'visible' && !isFetching && !loading) {
+        loadData(page, true);
       }
     }, pollIntervalMs);
 
     return () => clearInterval(intervalId);
-  }, [pollIntervalMs, loadData]);
+  }, [pollIntervalMs, loadData, isFetching, loading, page]);
 
   const loadMore = () => {
-    if (isFetchingMore || data.length >= 250) return;
+    if (isFetchingMore || isFetching || data.length >= 250) return;
     const nextPage = page + 1;
     setPage(nextPage);
     loadData(nextPage, false);
@@ -146,15 +97,8 @@ export const useCryptoData = (currency = 'usd', pollIntervalMs = 60000) => {
     loadData(page, false);
   };
 
-  // Add visual indicator for data refresh
-  useEffect(() => {
-    if (isFetching) {
-      setLastUpdated(new Date());
-    }
-  }, [isFetching]);
-
   return { 
-    data, loading, isFetching, error, lastUpdated, isRateLimited, 
+    data, loading, isFetching, error, lastUpdated, isStale,
     loadMore, isFetchingMore, hasMore: data.length < 250, retry
   };
 };

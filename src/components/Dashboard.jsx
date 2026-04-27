@@ -73,13 +73,13 @@ const Dashboard = () => {
     localStorage.setItem('selectedCurrency', currency);
   }, [currency]);
   
-  const { data, loading, isFetching, error, lastUpdated, isRateLimited, loadMore, isFetchingMore, hasMore, retry } = useCryptoData(currency);
-  const { stats, loading: globalLoading, isFetching: globalIsFetching, error: globalError, retry: retryGlobal } = useGlobalStats();
-  const { trending, loading: trendingLoading, isFetching: trendingIsFetching, error: trendingError, retry: retryTrending } = useTrending();
+  const { data, loading, isFetching, error, lastUpdated, isStale, loadMore, isFetchingMore, hasMore, retry } = useCryptoData(currency);
+  const { stats, loading: globalLoading, isFetching: globalIsFetching, error: globalError, isStale: globalIsStale, retry: retryGlobal } = useGlobalStats();
+  const { trending, loading: trendingLoading, isFetching: trendingIsFetching, error: trendingError, isStale: trendingIsStale, retry: retryTrending } = useTrending();
   
   // Alert Checking Logic
   useEffect(() => {
-    if (!data || alerts.length === 0) return;
+    if (!data || alerts.length === 0 || isStale) return; // Only trigger on fresh data
     
     const now = Date.now();
     const coinMap = new Map(data.map(c => [c.id, c]));
@@ -119,7 +119,7 @@ const Dashboard = () => {
         markAsTriggered(alert.id, alert.repeat);
       }
     });
-  }, [data, alerts, currency, markAsTriggered, showToast]);
+  }, [data, alerts, currency, markAsTriggered, showToast, isStale]);
 
   const debouncedQuery = useDebounce(searchQuery, 300);
 
@@ -169,78 +169,113 @@ const Dashboard = () => {
 
   return (
     <DashboardLayout>
-      {/* Header */}
-      <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30">
-              <Activity size={24} className="text-white" />
+      {/* Header Section */}
+      <header className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+        {/* Left Side: Logo & Last Updated */}
+        <div className="flex flex-col gap-1 w-full lg:w-auto">
+          <div className="flex items-center justify-between lg:justify-start gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30 shrink-0">
+                <Activity size={24} className="text-white" />
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                Crypto <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">Pulse</span>
+              </h1>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-              Crypto <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">Pulse</span>
-            </h1>
+            
+            {/* Mobile-only Theme Toggle (visible < lg) */}
+            <div className="lg:hidden">
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+            </div>
           </div>
-          <div className="flex items-center gap-2 mt-2 text-xs text-slate-400 font-medium">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-            </span>
-            <LastUpdated timestamp={lastUpdated} />
-            {(isFetching || globalIsFetching || trendingIsFetching) && !loading && (
-              <RefreshCw size={12} className="text-blue-500 animate-spin ml-1" aria-label="Fetching updates in background" />
-            )}
-            {error && !loading && (
-              <AlertTriangle size={14} className="text-rose-500 ml-1" title="Background update failed" />
-            )}
-            {isRateLimited && <span className="text-amber-500 ml-2">(Cached Data)</span>}
+          
+          <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-400 font-medium">
+            <div className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <LastUpdated timestamp={lastUpdated} />
+            </div>
+            
+            <div className="flex items-center gap-1.5 ml-2">
+              {(isFetching || globalIsFetching || trendingIsFetching) && !loading && (
+                <RefreshCw size={12} className="text-blue-500 animate-spin" aria-label="Fetching updates" />
+              )}
+              {error && !loading && (
+                <AlertTriangle size={14} className="text-rose-500" title="Background update failed" />
+              )}
+              {(isStale || globalIsStale || trendingIsStale) && (
+                <span className="text-amber-500 font-bold tracking-tighter uppercase text-[10px] bg-amber-50 dark:bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-900/30">
+                  Cached Data
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          <div className="flex bg-slate-100 dark:bg-slate-800/50 p-1 rounded-xl">
+        {/* Right Side: Navigation & Controls */}
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 w-full lg:w-auto">
+          {/* Main Controls Row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex bg-slate-100 dark:bg-slate-800/50 p-1 rounded-xl">
+              <button
+                onClick={() => setView('all')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === 'all' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+              >
+                <LayoutList size={16} /> <span className="hidden sm:inline">All</span>
+              </button>
+              <button
+                onClick={() => setView('watchlist')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === 'watchlist' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+              >
+                <Star size={16} className={view === 'watchlist' ? 'fill-amber-400 text-amber-400' : ''} /> <span className="hidden sm:inline">Watchlist</span>
+              </button>
+            </div>
+
             <button
-              onClick={() => setView('all')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === 'all' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+              onClick={() => setIsPortfolioOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition-colors shadow-sm"
             >
-              <LayoutList size={16} /> All
+              <Wallet size={16} /> <span className="hidden sm:inline">Portfolio</span>
             </button>
+
             <button
-              onClick={() => setView('watchlist')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === 'watchlist' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+              onClick={() => setIsAlertsOpen(true)}
+              className="relative p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 hover:text-amber-500 hover:border-amber-500/50 transition-all"
+              title="Manage Alerts"
             >
-              <Star size={16} className={view === 'watchlist' ? 'fill-amber-400 text-amber-400' : ''} /> Watchlist
+              <Bell size={18} />
+              {alerts.filter(a => !a.isTriggered).length > 0 && (
+                <span className="absolute top-0 right-0 -mt-1 -mr-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                </span>
+              )}
             </button>
+
+            <button 
+              onClick={handleRefreshAll}
+              disabled={isFetching || globalIsFetching || trendingIsFetching}
+              className="p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 hover:text-blue-500 hover:border-blue-500/50 transition-all disabled:opacity-50"
+              title="Refresh all data"
+            >
+              <RefreshCw size={18} className={isFetching || globalIsFetching || trendingIsFetching ? 'animate-spin' : ''} />
+            </button>
+            
+            {/* Desktop-only Theme Toggle (visible lg+) */}
+            <div className="hidden lg:block">
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+            </div>
           </div>
-          <button
-            onClick={() => setIsPortfolioOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition-colors shadow-sm"
-          >
-            <Wallet size={16} /> Portfolio
-          </button>
-          <button
-            onClick={() => setIsAlertsOpen(true)}
-            className="relative p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 hover:text-amber-500 hover:border-amber-500/50 transition-all"
-            title="Manage Alerts"
-          >
-            <Bell size={18} />
-            {alerts.filter(a => !a.isTriggered).length > 0 && (
-              <span className="absolute top-0 right-0 -mt-1 -mr-1 flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
-              </span>
-            )}
-          </button>
-          <button 
-            onClick={handleRefreshAll}
-            disabled={isFetching || globalIsFetching || trendingIsFetching}
-            className="p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 hover:text-blue-500 hover:border-blue-500/50 transition-all disabled:opacity-50"
-            title="Refresh all data"
-          >
-            <RefreshCw size={18} className={isFetching || globalIsFetching || trendingIsFetching ? 'animate-spin' : ''} />
-          </button>
-          <CurrencySelector currency={currency} onChange={setCurrency} />
-          <SearchBar value={searchQuery} onChange={setSearchQuery} />
-          <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+
+          {/* Currency & Search Group */}
+          <div className="flex items-center gap-2">
+            <div className="shrink-0">
+              <CurrencySelector currency={currency} onChange={setCurrency} />
+            </div>
+            <SearchBar value={searchQuery} onChange={setSearchQuery} />
+          </div>
         </div>
       </header>
 
@@ -249,31 +284,35 @@ const Dashboard = () => {
         stats={stats} 
         loading={globalLoading} 
         error={globalError} 
+        isStale={globalIsStale}
         currency={currency}
         onRetry={retryGlobal} 
       />
 
-      {/* Secondary Sections — 3-column grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Secondary Sections — Adaptive Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         <TopGainers coins={data} loading={loading} currency={currency} />
         <TopLosers coins={data} loading={loading} currency={currency} />
-        <Trending 
-          trending={trending} 
-          loading={trendingLoading} 
-          error={trendingError} 
-          onRetry={retryTrending} 
-        />
+        <div className="md:col-span-2 xl:col-span-1">
+          <Trending 
+            trending={trending} 
+            loading={trendingLoading} 
+            error={trendingError} 
+            isStale={trendingIsStale}
+            onRetry={retryTrending} 
+          />
+        </div>
       </div>
 
       {/* Main Table Section */}
       <main>
-        {loading ? (
+        {loading && data.length === 0 ? (
           <SectionCard title="Market Assets" icon={BarChart3} noPadding>
             <SkeletonRow rows={10} />
           </SectionCard>
         ) : (
           <div className="space-y-6">
-            <SectionCard title="Market Assets" icon={BarChart3} noPadding>
+            <SectionCard title="Market Assets" icon={BarChart3} noPadding badge={isStale ? "Cached" : null}>
               {error && (!data || data.length === 0) ? (
                 <div className="p-12">
                   <ErrorState variant="full" message={error} onRetry={retry} />
@@ -287,6 +326,7 @@ const Dashboard = () => {
                   sortConfig={sortConfig}
                   loading={loading}
                   isFetchingMore={isFetchingMore}
+                  isStale={isStale}
                 />
               )}
               

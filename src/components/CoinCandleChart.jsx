@@ -17,82 +17,59 @@ const CoinCandleChart = ({ coinId, currency = 'usd', days = 7, isDarkMode = fals
     let isMounted = true;
 
     const fetchOHLC = async () => {
-      const cacheKey = `${coinId}-${currency}-${days}`;
-      const cached = candleCache[cacheKey];
-
-      if (cached && (new Date() - cached.timestamp < CACHE_TTL)) {
-        setChartData(cached.data);
-        setLoading(false);
-        setError(null);
-        return;
-      }
-
       setLoading(true);
       setError(null);
 
-      if (abortControllerRef.current) abortControllerRef.current.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
       try {
-        const { data: rawData, error: fetchError } = await cryptoService.getOHLC(
-          coinId,
-          currency,
-          days,
-          controller.signal
-        );
+        const response = await cryptoService.getOHLC(coinId, currency, days);
 
         if (!isMounted) return;
 
-        if (fetchError) {
-          if (fetchError === 'Request was cancelled') return;
-          throw new Error(fetchError);
-        }
+        if (response.data && response.data.length > 0) {
+          // 1. DATA TRANSFORMATION & VALIDATION
+          const processed = response.data
+            .map(([ts, open, high, low, close]) => {
+              if ([ts, open, high, low, close].some(v => v === null || v === undefined || isNaN(v))) {
+                return null;
+              }
+              return {
+                time: Math.floor(ts / 1000), // Seconds (required by lightweight-charts)
+                open: Number(open),
+                high: Number(high),
+                low: Number(low),
+                close: Number(close)
+              };
+            })
+            .filter(Boolean);
 
-        if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
+          // 2. ENSURE UNIQUE & SORTED TIMESTAMPS
+          const validatedData = [];
+          const seenTimes = new Set();
+          
+          processed.sort((a, b) => a.time - b.time);
+          
+          for (const item of processed) {
+            if (!seenTimes.has(item.time)) {
+              validatedData.push(item);
+              seenTimes.add(item.time);
+            }
+          }
+
+          if (validatedData.length < 2) {
+            throw new Error('Insufficient data points for candle chart');
+          }
+
+          setChartData(validatedData);
+          setLoading(false);
+          
+          if (response.error && import.meta.env.DEV) {
+            console.warn("[CoinCandleChart] Fetch error but used cache:", response.error);
+          }
+        } else if (response.error) {
+          throw new Error(response.error);
+        } else {
           throw new Error('No candlestick data available');
         }
-
-        // 1. DATA TRANSFORMATION & VALIDATION
-        const processed = rawData
-          .map(([ts, open, high, low, close]) => {
-            if ([ts, open, high, low, close].some(v => v === null || v === undefined || isNaN(v))) {
-              return null;
-            }
-            return {
-              time: Math.floor(ts / 1000), // Seconds (required by lightweight-charts)
-              open: Number(open),
-              high: Number(high),
-              low: Number(low),
-              close: Number(close)
-            };
-          })
-          .filter(Boolean);
-
-        // 2. ENSURE UNIQUE & SORTED TIMESTAMPS
-        const validatedData = [];
-        const seenTimes = new Set();
-        
-        processed.sort((a, b) => a.time - b.time);
-        
-        for (const item of processed) {
-          if (!seenTimes.has(item.time)) {
-            validatedData.push(item);
-            seenTimes.add(item.time);
-          }
-        }
-
-        if (validatedData.length < 2) {
-          throw new Error('Insufficient data points for candle chart');
-        }
-
-        candleCache[cacheKey] = {
-          data: validatedData,
-          timestamp: new Date()
-        };
-
-        setChartData(validatedData);
-        setLoading(false);
       } catch (err) {
         if (isMounted) {
           console.error("OHLC Fetch Error:", err);
@@ -107,7 +84,6 @@ const CoinCandleChart = ({ coinId, currency = 'usd', days = 7, isDarkMode = fals
 
     return () => {
       isMounted = false;
-      if (abortControllerRef.current) abortControllerRef.current.abort();
     };
   }, [coinId, currency, days]);
 
@@ -122,8 +98,6 @@ const CoinCandleChart = ({ coinId, currency = 'usd', days = 7, isDarkMode = fals
       if (!isMounted || !container) return;
 
       try {
-
-        
         chart = createChart(container, {
           layout: {
             background: { type: ColorType.Solid, color: 'transparent' },
@@ -146,14 +120,23 @@ const CoinCandleChart = ({ coinId, currency = 'usd', days = 7, isDarkMode = fals
           },
         });
 
-        // V5 API: Use addSeries with the CandlestickSeries type
-        const candleSeries = chart.addSeries(CandlestickSeries, {
+        // Robust series creation: Try addSeries (V5) first, then fallback to addCandlestickSeries (V4)
+        let candleSeries;
+        const options = {
           upColor: '#10b981',
           downColor: '#f43f5e',
           borderVisible: false,
           wickUpColor: '#10b981',
           wickDownColor: '#f43f5e',
-        });
+        };
+
+        if (typeof chart.addSeries === 'function' && CandlestickSeries) {
+          candleSeries = chart.addSeries(CandlestickSeries, options);
+        } else if (typeof chart.addCandlestickSeries === 'function') {
+          candleSeries = chart.addCandlestickSeries(options);
+        } else {
+          throw new Error('Could not initialize candlestick series');
+        }
 
         candleSeries.setData(chartData);
         chart.timeScale().fitContent();
