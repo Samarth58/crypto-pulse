@@ -1,4 +1,4 @@
-const COINGECKO_BASE_URL = '/api';
+const COINGECKO_BASE_URL = import.meta.env.DEV ? '/api' : 'https://api.coingecko.com/api/v3';
 const API_KEY = import.meta.env.VITE_COINGECKO_API_KEY || '';
 
 // Cache: { url: { data, timestamp } }
