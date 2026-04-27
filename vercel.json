@@ -6,8 +6,9 @@
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://api.coingecko.com/api/v3/:path*"
+      "source": "/api/(.*)",
+      "destination": "/api/coins?path=$1"
     }
   ]
 }
+
